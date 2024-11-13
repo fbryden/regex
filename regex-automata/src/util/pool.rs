@@ -155,11 +155,12 @@ pub struct Pool<T, F = fn() -> T, const MAX_POOL_STACKS: usize = 8>(
     alloc::boxed::Box<inner::Pool<T, F, MAX_POOL_STACKS>>,
 );
 
-impl<T, F> Pool<T, F> {
-    /// Create a new pool. The given closure is used to create values in
-    /// the pool when necessary.
-    pub fn new(create: F) -> Pool<T, F> {
-        Pool(alloc::boxed::Box::new(inner::Pool::new(create)))
+impl<T, F, const MAX_POOL_STACKS: usize> Pool<T, F, MAX_POOL_STACKS> {
+    /// Create a new pool, inferring types based on the closure provided.
+    pub fn new(create: F) -> Pool<T, F, MAX_POOL_STACKS> {
+        Pool(alloc::boxed::Box::new(
+            inner::Pool::<T, F, MAX_POOL_STACKS>::new(create),
+        ))
     }
 }
 
@@ -1166,7 +1167,7 @@ mod tests {
     // permitted getting aliasing &mut borrows to the same place in memory.
     #[test]
     fn thread_owner_distinct() {
-        let pool = Pool::new(|| vec!['a']);
+        let pool = Pool::<_, _, 8>::new(|| vec!['a']);
 
         {
             let mut g1 = pool.get();
@@ -1193,7 +1194,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn thread_owner_sync() {
-        let pool = Pool::new(|| vec!['a']);
+        let pool = Pool::<_, _, 8>::new(|| vec!['a']);
         {
             let mut g1 = pool.get();
             let mut g2 = pool.get();
@@ -1228,7 +1229,7 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn thread_owner_send_drop() {
-        let pool = Pool::new(|| vec!['a']);
+        let pool = Pool::<_, _, 8>::new(|| vec!['a']);
         // Establishes this thread as the owner.
         {
             pool.get().push('b');
