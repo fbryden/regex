@@ -32,7 +32,7 @@ use crate::{
 type CachePool = Pool<Cache, CachePoolFn>;
 
 /// Same as above, but for the guard returned by a pool.
-type CachePoolGuard<'a> = PoolGuard<'a, Cache, CachePoolFn>;
+type CachePoolGuard<'a> = PoolGuard<'a, Cache, CachePoolFn, 8>;
 
 /// The type of the closure we use to create new caches. We need to spell out
 /// all of the marker traits or else we risk leaking !MARKER impls.

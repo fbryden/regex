@@ -151,7 +151,9 @@ being quite expensive.
 /// let expected = Some(Match::must(0, 3..14));
 /// assert_eq!(expected, RE.find(&mut CACHE.get(), b"zzzfoo12345barzzz"));
 /// ```
-pub struct Pool<T, F = fn() -> T>(alloc::boxed::Box<inner::Pool<T, F>>);
+pub struct Pool<T, F = fn() -> T, const MAX_POOL_STACKS: usize = 8>(
+    alloc::boxed::Box<inner::Pool<T, F, MAX_POOL_STACKS>>,
+);
 
 impl<T, F> Pool<T, F> {
     /// Create a new pool. The given closure is used to create values in
@@ -161,7 +163,9 @@ impl<T, F> Pool<T, F> {
     }
 }
 
-impl<T: Send, F: Fn() -> T> Pool<T, F> {
+impl<T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize>
+    Pool<T, F, MAX_POOL_STACKS>
+{
     /// Get a value from the pool. The caller is guaranteed to have
     /// exclusive access to the given value. Namely, it is guaranteed that
     /// this will never return a value that was returned by another call to
@@ -178,7 +182,7 @@ impl<T: Send, F: Fn() -> T> Pool<T, F> {
     /// *not* guaranteed to return the same value received in the first `get`
     /// call.
     #[inline]
-    pub fn get(&self) -> PoolGuard<'_, T, F> {
+    pub fn get(&self) -> PoolGuard<'_, T, F, MAX_POOL_STACKS> {
         PoolGuard(self.0.get())
     }
 }
@@ -193,21 +197,27 @@ impl<T: core::fmt::Debug, F> core::fmt::Debug for Pool<T, F> {
 ///
 /// The purpose of the guard is to use RAII to automatically put the value
 /// back in the pool once it's dropped.
-pub struct PoolGuard<'a, T: Send, F: Fn() -> T>(inner::PoolGuard<'a, T, F>);
+pub struct PoolGuard<'a, T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize>(
+    inner::PoolGuard<'a, T, F, MAX_POOL_STACKS>,
+);
 
-impl<'a, T: Send, F: Fn() -> T> PoolGuard<'a, T, F> {
+impl<'a, T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize>
+    PoolGuard<'a, T, F, MAX_POOL_STACKS>
+{
     /// Consumes this guard and puts it back into the pool.
     ///
     /// This circumvents the guard's `Drop` implementation. This can be useful
     /// in circumstances where the automatic `Drop` results in poorer codegen,
     /// such as calling non-inlined functions.
     #[inline]
-    pub fn put(this: PoolGuard<'_, T, F>) {
+    pub fn put(this: PoolGuard<'_, T, F, MAX_POOL_STACKS>) {
         inner::PoolGuard::put(this.0);
     }
 }
 
-impl<'a, T: Send, F: Fn() -> T> core::ops::Deref for PoolGuard<'a, T, F> {
+impl<'a, T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize> core::ops::Deref
+    for PoolGuard<'a, T, F, MAX_POOL_STACKS>
+{
     type Target = T;
 
     #[inline]
@@ -216,15 +226,21 @@ impl<'a, T: Send, F: Fn() -> T> core::ops::Deref for PoolGuard<'a, T, F> {
     }
 }
 
-impl<'a, T: Send, F: Fn() -> T> core::ops::DerefMut for PoolGuard<'a, T, F> {
+impl<'a, T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize>
+    core::ops::DerefMut for PoolGuard<'a, T, F, MAX_POOL_STACKS>
+{
     #[inline]
     fn deref_mut(&mut self) -> &mut T {
         self.0.value_mut()
     }
 }
 
-impl<'a, T: Send + core::fmt::Debug, F: Fn() -> T> core::fmt::Debug
-    for PoolGuard<'a, T, F>
+impl<
+        'a,
+        T: Send + core::fmt::Debug,
+        F: Fn() -> T,
+        const MAX_POOL_STACKS: usize,
+    > core::fmt::Debug for PoolGuard<'a, T, F, MAX_POOL_STACKS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_tuple("PoolGuard").field(&self.0).finish()
@@ -328,7 +344,7 @@ mod inner {
     ///
     /// See this issue for more context and discussion:
     /// https://github.com/rust-lang/regex/issues/934
-    const MAX_POOL_STACKS: usize = 32;
+    // const MAX_POOL_STACKS: usize = 32;
 
     thread_local!(
         /// A thread local used to assign an ID to a thread.
@@ -371,7 +387,7 @@ mod inner {
     /// makes accesses by the owner of a pool faster than all other threads.
     /// This makes the common case of running a regex within a single thread
     /// faster by avoiding mutex unlocking.
-    pub(super) struct Pool<T, F> {
+    pub(super) struct Pool<T, F, const MAX_POOL_STACKS: usize> {
         /// A function to create more T values when stack is empty and a caller
         /// has requested a T.
         create: F,
@@ -428,7 +444,10 @@ mod inner {
     //
     // We require `F: Send + Sync` because we call `F` at any point on demand,
     // potentially from multiple threads simultaneously.
-    unsafe impl<T: Send, F: Send + Sync> Sync for Pool<T, F> {}
+    unsafe impl<T: Send, F: Send + Sync, const MAX_POOL_STACKS: usize> Sync
+        for Pool<T, F, MAX_POOL_STACKS>
+    {
+    }
 
     // If T is UnwindSafe, then since we provide exclusive access to any
     // particular value in the pool, the pool should therefore also be
@@ -437,7 +456,13 @@ mod inner {
     // We require `F: UnwindSafe + RefUnwindSafe` because we call `F` at any
     // point on demand, so it needs to be unwind safe on both dimensions for
     // the entire Pool to be unwind safe.
-    impl<T: UnwindSafe, F: UnwindSafe + RefUnwindSafe> UnwindSafe for Pool<T, F> {}
+    impl<
+            T: UnwindSafe,
+            F: UnwindSafe + RefUnwindSafe,
+            const MAX_POOL_STACKS: usize,
+        > UnwindSafe for Pool<T, F, MAX_POOL_STACKS>
+    {
+    }
 
     // If T is UnwindSafe, then since we provide exclusive access to any
     // particular value in the pool, the pool should therefore also be
@@ -446,15 +471,18 @@ mod inner {
     // We require `F: UnwindSafe + RefUnwindSafe` because we call `F` at any
     // point on demand, so it needs to be unwind safe on both dimensions for
     // the entire Pool to be unwind safe.
-    impl<T: UnwindSafe, F: UnwindSafe + RefUnwindSafe> RefUnwindSafe
-        for Pool<T, F>
+    impl<
+            T: UnwindSafe,
+            F: UnwindSafe + RefUnwindSafe,
+            const MAX_POOL_STACKS: usize,
+        > RefUnwindSafe for Pool<T, F, MAX_POOL_STACKS>
     {
     }
 
-    impl<T, F> Pool<T, F> {
+    impl<T, F, const MAX_POOL_STACKS: usize> Pool<T, F, MAX_POOL_STACKS> {
         /// Create a new pool. The given closure is used to create values in
         /// the pool when necessary.
-        pub(super) fn new(create: F) -> Pool<T, F> {
+        pub(super) fn new(create: F) -> Pool<T, F, MAX_POOL_STACKS> {
             // FIXME: Now that we require 1.65+, Mutex::new is available as
             // const... So we can almost mark this function as const. But of
             // course, we're creating a Vec of stacks below (we didn't when I
@@ -503,11 +531,13 @@ mod inner {
         }
     }
 
-    impl<T: Send, F: Fn() -> T> Pool<T, F> {
+    impl<T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize>
+        Pool<T, F, MAX_POOL_STACKS>
+    {
         /// Get a value from the pool. This may block if another thread is also
         /// attempting to retrieve a value from the pool.
         #[inline]
-        pub(super) fn get(&self) -> PoolGuard<'_, T, F> {
+        pub(super) fn get(&self) -> PoolGuard<'_, T, F, MAX_POOL_STACKS> {
             // Our fast path checks if the caller is the thread that "owns"
             // this pool. Or stated differently, whether it is the first thread
             // that tried to extract a value from the pool. If it is, then we
@@ -543,7 +573,7 @@ mod inner {
             &self,
             caller: usize,
             owner: usize,
-        ) -> PoolGuard<'_, T, F> {
+        ) -> PoolGuard<'_, T, F, MAX_POOL_STACKS> {
             if owner == THREAD_ID_UNOWNED {
                 // This sentinel means this pool is not yet owned. We try to
                 // atomically set the owner. If we do, then this thread becomes
@@ -627,13 +657,19 @@ mod inner {
 
         /// Create a guard that represents the special owned T.
         #[inline]
-        fn guard_owned(&self, caller: usize) -> PoolGuard<'_, T, F> {
+        fn guard_owned(
+            &self,
+            caller: usize,
+        ) -> PoolGuard<'_, T, F, MAX_POOL_STACKS> {
             PoolGuard { pool: self, value: Err(caller), discard: false }
         }
 
         /// Create a guard that contains a value from the pool's stack.
         #[inline]
-        fn guard_stack(&self, value: Box<T>) -> PoolGuard<'_, T, F> {
+        fn guard_stack(
+            &self,
+            value: Box<T>,
+        ) -> PoolGuard<'_, T, F, MAX_POOL_STACKS> {
             PoolGuard { pool: self, value: Ok(value), discard: false }
         }
 
@@ -641,12 +677,17 @@ mod inner {
         /// instruction to throw away the value instead of putting it back
         /// into the pool.
         #[inline]
-        fn guard_stack_transient(&self, value: Box<T>) -> PoolGuard<'_, T, F> {
+        fn guard_stack_transient(
+            &self,
+            value: Box<T>,
+        ) -> PoolGuard<'_, T, F, MAX_POOL_STACKS> {
             PoolGuard { pool: self, value: Ok(value), discard: true }
         }
     }
 
-    impl<T: core::fmt::Debug, F> core::fmt::Debug for Pool<T, F> {
+    impl<T: core::fmt::Debug, F, const MAX_POOL_STACKS: usize> core::fmt::Debug
+        for Pool<T, F, MAX_POOL_STACKS>
+    {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.debug_struct("Pool")
                 .field("stacks", &self.stacks)
@@ -657,9 +698,14 @@ mod inner {
     }
 
     /// A guard that is returned when a caller requests a value from the pool.
-    pub(super) struct PoolGuard<'a, T: Send, F: Fn() -> T> {
+    pub(super) struct PoolGuard<
+        'a,
+        T: Send,
+        F: Fn() -> T,
+        const MAX_POOL_STACKS: usize,
+    > {
         /// The pool that this guard is attached to.
-        pool: &'a Pool<T, F>,
+        pool: &'a Pool<T, F, MAX_POOL_STACKS>,
         /// This is Err when the guard represents the special "owned" value.
         /// In which case, the value is retrieved from 'pool.owner_val'. And
         /// in the special case of `Err(THREAD_ID_DROPPED)`, it means the
@@ -673,7 +719,9 @@ mod inner {
         discard: bool,
     }
 
-    impl<'a, T: Send, F: Fn() -> T> PoolGuard<'a, T, F> {
+    impl<'a, T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize>
+        PoolGuard<'a, T, F, MAX_POOL_STACKS>
+    {
         /// Return the underlying value.
         #[inline]
         pub(super) fn value(&self) -> &T {
@@ -726,7 +774,7 @@ mod inner {
 
         /// Consumes this guard and puts it back into the pool.
         #[inline]
-        pub(super) fn put(this: PoolGuard<'_, T, F>) {
+        pub(super) fn put(this: PoolGuard<'_, T, F, MAX_POOL_STACKS>) {
             // Since this is effectively consuming the guard and putting the
             // value back into the pool, there's no reason to run its Drop
             // impl after doing this. I don't believe there is a correctness
@@ -773,15 +821,21 @@ mod inner {
         }
     }
 
-    impl<'a, T: Send, F: Fn() -> T> Drop for PoolGuard<'a, T, F> {
+    impl<'a, T: Send, F: Fn() -> T, const MAX_POOL_STACKS: usize> Drop
+        for PoolGuard<'a, T, F, { MAX_POOL_STACKS }>
+    {
         #[inline]
         fn drop(&mut self) {
             self.put_imp();
         }
     }
 
-    impl<'a, T: Send + core::fmt::Debug, F: Fn() -> T> core::fmt::Debug
-        for PoolGuard<'a, T, F>
+    impl<
+            'a,
+            T: Send + core::fmt::Debug,
+            F: Fn() -> T,
+            const MAX_POOL_STACKS: usize,
+        > core::fmt::Debug for PoolGuard<'a, T, F, { MAX_POOL_STACKS }>
     {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
             f.debug_struct("PoolGuard")
