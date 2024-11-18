@@ -31,8 +31,11 @@ use crate::{
 /// what we use for the meta regex below.
 type CachePool = Pool<Cache, CachePoolFn>;
 
+type CachePoolGuardWithStacks<'a, const MAX_POOL_STACKS: usize> =
+    PoolGuard<'a, Cache, CachePoolFn, MAX_POOL_STACKS>;
+
 /// Same as above, but for the guard returned by a pool.
-type CachePoolGuard<'a> = PoolGuard<'a, Cache, CachePoolFn, 8>;
+type CachePoolGuard<'a> = CachePoolGuardWithStacks<'a, 8>;
 
 /// The type of the closure we use to create new caches. We need to spell out
 /// all of the marker traits or else we risk leaking !MARKER impls.
